@@ -1,18 +1,62 @@
 import subprocess
 
+VERSION: str = ""
 try:
     VERSION = (
-        subprocess.check_output(["git", "describe", "--tags", "--always"])
+        subprocess.check_output(["git", "describe", "--tags", "--always", "--dirty"])
         .decode("ascii")
         .strip()
     )
-except Exception:
+except (subprocess.SubprocessError, OSError, ValueError) as e:
+    print(f"Failed setting version constant, reason:  {str(e)}")
     VERSION = "version_unknown"
 
-DISCORD_MSG_CHAR_LIMIT = 2000
+# constant string exempt from i18n
+DEFAULT_FOOTER_TEXT: str = f"Just-Some-Bots/MusicBot ({VERSION})"
+DEFAULT_BOT_NAME: str = "MusicBot"
+DEFAULT_BOT_ICON: str = "https://i.imgur.com/gFHBoZA.png"
 
-EMOJI_CHECK_MARK_BUTTON = "\u2705"
-EMOJI_CROSS_MARK_BUTTON = "\u274E"
-EMOJI_IDLE_ICON = "\U0001f634"  # same as \N{SLEEPING FACE}
-EMOJI_PLAY_ICON = "\u25B6"  # add \uFE0F to make button
-EMOJI_PAUSE_ICON = "\u23F8\uFE0F"  # add \uFE0F to make button
+
+# File path constants
+DEFAULT_OPTIONS_FILE: str = "config/options.ini"
+DEFAULT_PERMS_FILE: str = "config/permissions.ini"
+DEFAULT_I18N_FILE: str = "config/i18n/en.json"
+DEFAULT_COMMAND_ALIAS_FILE: str = "config/aliases.json"
+DEFAULT_BLACKLIST_FILE: str = "config/blacklist.txt"
+DEFAULT_WHITELIST_FILE: str = "config/whitelist.txt"
+DEFAULT_AUTOPLAYLIST_FILE: str = "config/autoplaylist.txt"
+BUNDLED_AUTOPLAYLIST_FILE: str = "config/_autoplaylist.txt"
+DEFAULT_AUDIO_CACHE_PATH: str = "audio_cache"
+
+EXAMPLE_OPTIONS_FILE: str = "config/example_options.ini"
+EXAMPLE_PERMS_FILE: str = "config/example_permissions.ini"
+EXAMPLE_COMMAND_ALIAS_FILE: str = "config/example_aliases.json"
+
+
+# Logging related constants
+DEFAULT_MUSICBOT_LOG_FILE: str = "logs/musicbot.log"
+DEFAULT_DISCORD_LOG_FILE: str = "logs/discord.log"
+# Default is 0, for no rotation at all.
+DEFAULT_LOGS_KEPT: int = 0
+MAXIMUM_LOGS_LIMIT: int = 100
+# This value is run through strftime() and then sandwiched between
+DEFAULT_LOGS_ROTATE_FORMAT: str = ".ended-%Y-%j-%H%m%S"
+# Default log level can be one of:
+# CRITICAL, ERROR, WARNING, INFO, DEBUG,
+# VOICEDEBUG, FFMPEG, NOISY, or EVERYTHING
+DEFAULT_LOG_LEVEL: str = "INFO"
+
+
+# Discord and other API constants
+DISCORD_MSG_CHAR_LIMIT: int = 2000
+
+
+EMOJI_CHECK_MARK_BUTTON: str = "\u2705"
+EMOJI_CROSS_MARK_BUTTON: str = "\u274E"
+EMOJI_IDLE_ICON: str = "\U0001f634"  # same as \N{SLEEPING FACE}
+EMOJI_PLAY_ICON: str = "\u25B6"  # add \uFE0F to make button
+EMOJI_PAUSE_ICON: str = "\u23F8\uFE0F"  # add \uFE0F to make button
+EMOJI_LAST_ICON: str = "\u23ED\uFE0F"  # next track button
+EMOJI_FIRST_ICON: str = "\u23EE\uFE0F"  # last track button
+EMOJI_NEXT_ICON: str = "\u23E9"  # fast-forward button
+EMOJI_PREV_ICON: str = "\u23EA"  # rewind button
