@@ -5444,7 +5444,6 @@ class MusicBot(discord.Client):
                     continue
                 name = meta.get("name", "")
                 ver = meta.get("version", "")
-                log.info("package available %s == %s", name, ver)
                 if name and ver:
                     pip_packages += f"Update for `{name}` to version: `{ver}`\n"
             if pip_packages:
