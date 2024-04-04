@@ -18,6 +18,7 @@ from typing import (
 )
 
 import configupdater
+from configupdater.block import Comment, Space
 
 from .constants import (
     BUNDLED_AUTOPLAYLIST_FILE,
@@ -98,7 +99,11 @@ class Config:
         """
         log.info("Loading config from:  %s", config_file)
         self.config_file = config_file
+        # Make sure the given file exists, or copy the example file if it does not.
         self.find_config()
+
+        # Make updates to config file before loading it in.
+        ConfigRenameManager(self.config_file)
 
         # TODO: maybe some mechanism to handle config renames?
         config = ExtendedConfigParser()
@@ -187,6 +192,7 @@ class Config:
             comment="Discord Member IDs for other bots that MusicBot should not ignore.  All bots are ignored by default.",
         )
 
+        # Chat section.
         self.command_prefix: str = self.register.init_option(
             section="Chat",
             option="CommandPrefix",
@@ -253,7 +259,79 @@ class Config:
             getter="getboolean",
             comment="MusicBot will automatically delete Now Playing messages.",
         )
+        self.now_playing_mentions: bool = self.register.init_option(
+            section="Chat",
+            option="NowPlayingMentions",
+            dest="now_playing_mentions",
+            default=ConfigDefaults.now_playing_mentions,
+            getter="getboolean",
+            comment="Mention the user who added the song when it is played.",
+        )
+        self.delete_messages: bool = self.register.init_option(
+            section="Chat",
+            option="DeleteMessages",
+            dest="delete_messages",
+            default=ConfigDefaults.delete_messages,
+            getter="getboolean",
+            comment="Allow MusicBot to automatically delete messages it sends, after a short delay.",
+        )
+        self.delete_invoking: bool = self.register.init_option(
+            section="Chat",
+            option="DeleteInvoking",
+            dest="delete_invoking",
+            default=ConfigDefaults.delete_invoking,
+            getter="getboolean",
+            comment="Auto delete valid commands after a short delay.",
+        )
+        self.embeds: bool = self.register.init_option(
+            section="Chat",
+            option="UseEmbeds",
+            dest="embeds",
+            default=ConfigDefaults.embeds,
+            getter="getboolean",
+            comment="Allow MusicBot to format it's messages as embeds.",
+        )
+        self.usealias: bool = self.register.init_option(
+            section="Chat",
+            option="UseCommandAlias",
+            dest="usealias",
+            default=ConfigDefaults.usealias,
+            getter="getboolean",
+            comment="If enabled, MusicBot will allow commands to have multiple names using data in:  config/aliases.json",
+        )
+        self.footer_text: str = self.register.init_option(
+            section="Chat",
+            option="CustomEmbedFooter",
+            dest="footer_text",
+            default=ConfigDefaults.footer_text,
+            comment="Replace MusicBot name/version in embed footer with custom text. Only applied when UseEmbeds is enabled and it is not blank.",
+        )
+        self.enable_options_per_guild: bool = self.register.init_option(
+            section="Chat",
+            option="EnablePrefixPerGuild",
+            dest="enable_options_per_guild",
+            default=ConfigDefaults.enable_options_per_guild,
+            getter="getboolean",
+            comment="Allow MusicBot to save a per-server command prefix, and enables setprefix command.",
+        )
+        self.searchlist: bool = self.register.init_option(
+            section="Chat",
+            option="SearchList",
+            dest="searchlist",
+            default=ConfigDefaults.searchlist,
+            getter="getboolean",
+            comment="If enabled, users must indicate search result choices by sending a message instead of using reactions.",
+        )
+        self.defaultsearchresults: int = self.register.init_option(
+            section="Chat",
+            option="DefaultSearchResults",
+            dest="defaultsearchresults",
+            default=ConfigDefaults.defaultsearchresults,
+            getter="getint",
+            comment="Sets the default number of search results to fetch when using search command without a specific number.",
+        )
 
+        # MusicBot section
         self.default_volume: float = self.register.init_option(
             section="MusicBot",
             option="DefaultVolume",
@@ -316,14 +394,6 @@ class Config:
             getter="getboolean",
             comment="If SaveVideos is enabled, never purge auto playlist songs from the cache.",
         )
-        self.now_playing_mentions: bool = self.register.init_option(
-            section="MusicBot",
-            option="NowPlayingMentions",
-            dest="now_playing_mentions",
-            default=ConfigDefaults.now_playing_mentions,
-            getter="getboolean",
-            comment="Mention the user who added the song when it is played.",
-        )
         self.auto_summon: bool = self.register.init_option(
             section="MusicBot",
             option="AutoSummon",
@@ -376,22 +446,6 @@ class Config:
             getter="getboolean",
             comment="MusicBot will automatically pause playback when no users are listening.",
         )
-        self.delete_messages: bool = self.register.init_option(
-            section="MusicBot",
-            option="DeleteMessages",
-            dest="delete_messages",
-            default=ConfigDefaults.delete_messages,
-            getter="getboolean",
-            comment="Allow MusicBot to automatically delete messages it sends, after a short delay.",
-        )
-        self.delete_invoking: bool = self.register.init_option(
-            section="MusicBot",
-            option="DeleteInvoking",
-            dest="delete_invoking",
-            default=ConfigDefaults.delete_invoking,
-            getter="getboolean",
-            comment="Auto delete valid commands after a short delay.",
-        )
         self.persistent_queue: bool = self.register.init_option(
             section="MusicBot",
             option="PersistentQueue",
@@ -430,14 +484,6 @@ class Config:
             default=ConfigDefaults.use_experimental_equalization,
             getter="getboolean",
             comment="Tries to use ffmpeg to get volume normalizing options for use in playback.",
-        )
-        self.embeds: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseEmbeds",
-            dest="embeds",
-            default=ConfigDefaults.embeds,
-            getter="getboolean",
-            comment="Allow MusicBot to format it's messages as embeds.",
         )
         self.queue_length: int = self.register.init_option(
             section="MusicBot",
@@ -478,21 +524,6 @@ class Config:
             default=ConfigDefaults.leavenonowners,
             getter="getboolean",
             comment="If enabled, MusicBot will leave servers if the owner is not in their member list.",
-        )
-        self.usealias: bool = self.register.init_option(
-            section="MusicBot",
-            option="UseAlias",
-            dest="usealias",
-            default=ConfigDefaults.usealias,
-            getter="getboolean",
-            comment="If enabled, MusicBot will allow commands to have multiple names using data in:  config/aliases.json",
-        )
-        self.footer_text: str = self.register.init_option(
-            section="MusicBot",
-            option="CustomEmbedFooter",
-            dest="footer_text",
-            default=ConfigDefaults.footer_text,
-            comment="Replace MusicBot name/version in embed footer with custom text. Only applied when UseEmbeds is enabled and it is not blank.",
         )
         self.self_deafen: bool = self.register.init_option(
             section="MusicBot",
@@ -537,32 +568,6 @@ class Config:
             getter="getduration",
             comment="MusicBot will wait for this period of time before leaving voice channel when player is not playing or is paused. Set to 0 to disable.",
         )
-        self.searchlist: bool = self.register.init_option(
-            section="MusicBot",
-            option="SearchList",
-            dest="searchlist",
-            default=ConfigDefaults.searchlist,
-            getter="getboolean",
-            comment="If enabled, users must indicate search result choices by sending a message instead of using reactions.",
-        )
-        self.defaultsearchresults: int = self.register.init_option(
-            section="MusicBot",
-            option="DefaultSearchResults",
-            dest="defaultsearchresults",
-            default=ConfigDefaults.defaultsearchresults,
-            getter="getint",
-            comment="Sets the default number of search results to fetch when using search command without a specific number.",
-        )
-
-        self.enable_options_per_guild: bool = self.register.init_option(
-            section="MusicBot",
-            option="EnablePrefixPerGuild",
-            dest="enable_options_per_guild",
-            default=ConfigDefaults.enable_options_per_guild,
-            getter="getboolean",
-            comment="Allow MusicBot to save a per-server command prefix, and enables setprefix command.",
-        )
-
         self.round_robin_queue: bool = self.register.init_option(
             section="MusicBot",
             option="RoundRobinQueue",
@@ -990,7 +995,6 @@ class Config:
         """
         Converts the current Config value into an INI file value as needed.
         Note: ConfigParser must not use multi-line values. This will break them.
-        Should multiline values be needed, maybe use ConfigUpdater package instead.
         """
         try:
             cu = configupdater.ConfigUpdater()
@@ -1036,10 +1040,137 @@ class Config:
             return False
 
 
+class ConfigRenameManager:
+    """
+    This class provides a method to move or rename config options.
+    All renaming is done sequentially, to ensure that older versions of config
+    can be carried into newer versions with minimal manual edits.
+    """
+
+    def __init__(self, config_file: pathlib.Path) -> None:
+        """Register all config remaps, past or present."""
+        self._cfg_file = config_file
+
+        # The format of config remap items is as follows:
+        # (origin_section, origin_name, new_section, new_name)
+        # These values are case sensitive, and must match existing options.
+        # If not found, no error/warning is raised, it is assumed they are renamed already.
+        self._remap: List[Tuple[str, str, str, str]] = [
+            # fmt: off
+            # Rename LeaveAfterSong and Blacklist options  @  2024/02/21
+            ("MusicBot", "LeaveAfterSong", "MusicBot", "LeaveAfterQueueEmpty"),
+            ("Files", "Blacklist", "Files", "UserBlocklistFile"),
+
+            # Move chat-related to Chat section  @  2024/04/02
+            # Also renames UseAlias to UseCommandAlias for clarity.
+            ("MusicBot", "DeleteMessages",       "Chat", "DeleteMessages"),  # noqa: E241
+            ("MusicBot", "DeleteInvoking",       "Chat", "DeleteInvoking"),  # noqa: E241
+            ("MusicBot", "NowPlayingMentions",   "Chat", "NowPlayingMentions"),  # noqa: E241
+            ("MusicBot", "UseEmbeds",            "Chat", "UseEmbeds"),  # noqa: E241
+            ("MusicBot", "UseAlias",             "Chat", "UseCommandAlias"),  # noqa: E241
+            ("MusicBot", "CustomEmbedFooter",    "Chat", "CustomEmbedFooter"),  # noqa: E241
+            ("MusicBot", "EnablePrefixPerGuild", "Chat", "EnablePrefixPerGuild"),
+            ("MusicBot", "SearchList",           "Chat", "SearchList"),  # noqa: E241
+            ("MusicBot", "DefaultSearchResults", "Chat", "DefaultSearchResults"),
+            # fmt: on
+        ]
+        self.update_config_options()
+
+    def _handle_remap_item(
+        self, cu: configupdater.ConfigUpdater, remap: Tuple[str, str, str, str]
+    ) -> None:
+        """Logic for updating one item from the remap."""
+        o_sect, o_opt, n_sect, n_opt = remap
+
+        log.debug(
+            "Renaming INI file entry [%s] > %s  to  [%s] > %s",
+            o_sect,
+            o_opt,
+            n_sect,
+            n_opt,
+        )
+
+        opt = cu.get(o_sect, o_opt)
+        # Simply rename the config in-place if possible.
+        if o_sect == n_sect:
+            cu[n_sect].insert_at(opt.container_idx).option(
+                n_opt,
+                opt.value,
+            )
+            cu.remove_option(o_sect, o_opt)
+
+        # Move the option and comments above it.
+        else:
+            opt = cu.get(o_sect, o_opt)
+            blocks = []
+            prev_block = opt.previous_block
+            while prev_block is not None:
+                if not isinstance(prev_block, (Comment, Space)):
+                    break
+                # prime the next block to inspect.
+                np_block = prev_block.previous_block
+                # detach this block for reuse.
+                block = prev_block.detach()
+                blocks.append(block)
+                # move on to the next block.
+                prev_block = np_block
+
+            # Remove the old option, add new with the same value.
+            cu.remove_option(o_sect, o_opt)
+            cu[n_sect][n_opt] = opt.value
+            # Add the comments to the new option.
+            blocks.reverse()
+            for block in blocks:
+                if isinstance(block, Comment):
+                    cu[n_sect][n_opt].add_before.comment(str(block))
+                if isinstance(block, Space):
+                    cu[n_sect][n_opt].add_before.space(len(block.lines))
+
+    def update_config_options(self) -> None:
+        """
+        Uses ConfigUpdater to find mapped options and rename them.
+        """
+        try:
+            cu = configupdater.ConfigUpdater()
+            cu.optionxform = str  # type: ignore
+            cu.read(self._cfg_file, encoding="utf8")
+
+            updates = 0
+            for item in self._remap:
+                if cu.has_option(item[0], item[1]):
+                    updates += 1
+                    self._handle_remap_item(cu, item)
+
+            if updates:
+                log.debug("Upgrading config file with renamed options...")
+                # Ensure some spacing exists at the end of sections.
+                for sect in cu.iter_sections():
+                    if not isinstance(sect.last_block, Space):
+                        sect.add_after.space(2)
+
+                # write the changes to file.
+                cu.update_file()
+
+        except (
+            OSError,
+            AttributeError,
+            configparser.DuplicateOptionError,
+            configparser.DuplicateSectionError,
+            configparser.ParsingError,
+        ):
+            log.exception(
+                "Failed to upgrade config.  You'll need to upgrade it manually."
+            )
+
+
 class ConfigDefaults:
     """
     This class contains default values used mainly as config fallback values.
     None type is not allowed as a default value.
+
+    NOTICE:
+        Users should never change these values to "configure" a bot!
+        Always use the file `config/options.ini` instead!
     """
 
     owner_id: int = 0
