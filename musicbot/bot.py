@@ -137,6 +137,7 @@ class MusicBot(discord.Client):
 
         self.use_certifi: bool = use_certifi
         self.exit_signal: ExitSignals = None
+        self._init_time: float = time.time()
         self._os_signal: Optional[signal.Signals] = None
         self._ping_peer_addr: str = ""
         self.network_outage: bool = False
@@ -6656,6 +6657,73 @@ class MusicBot(discord.Client):
             f"**Source Code Updates:**\n{git_status}\n\n"
             f"**Dependency Updates:**\n{pip_status}",
             delete_after=60,
+        )
+
+    @owner_only
+    async def cmd_botlatency(self) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}botlatency
+
+        Prints latency info for all voice clients.
+        """
+        vclats = ""
+        for vc in self.voice_clients:
+            if not isinstance(vc, discord.VoiceClient) or not hasattr(
+                vc.channel, "rtc_region"
+            ):
+                log.debug("Got a strange voice client entry.")
+                continue
+
+            vl = vc.latency * 1000
+            vla = vc.average_latency * 1000
+            # Display Auto for region instead of None
+            region = vc.channel.rtc_region or "auto"
+            vclats += f"- `{vl:.0f} ms` (`{vla:.0f} ms` Avg.) in region: `{region}`\n"
+
+        if not vclats:
+            vclats = "No voice clients connected.\n"
+
+        sl = self.latency * 1000
+        return Response(
+            f"**API Latency:** `{sl:.0f} ms`\n**VoiceClient Latency:**\n{vclats}",
+            delete_after=30,
+        )
+
+    async def cmd_latency(self, guild: discord.Guild) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}latency
+
+        Prints the latency info available to MusicBot.
+        If connected to a voice channel, voice latency is also returned.
+        """
+
+        voice_lat = ""
+        if guild.id in self.players:
+            vc = self.players[guild.id].voice_client
+            if vc:
+                vl = vc.latency * 1000
+                vla = vc.average_latency * 1000
+                voice_lat = f"\n**Voice Latency:** `{vl:.0f} ms` (`{vla:.0f} ms` Avg.)"
+        sl = self.latency * 1000
+        return Response(
+            f"**API Latency:** `{sl:.0f} ms`{voice_lat}",
+            delete_after=30,
+        )
+
+    async def cmd_uptime(self) -> CommandResponse:
+        """
+        Usage:
+            {command_prefix}uptime
+
+        Displays the MusicBot uptime, since last start/restart.
+        """
+        uptime = time.time() - self._init_time
+        delta = format_song_duration(uptime)
+        return Response(
+            f"MusicBot has been up for `{delta}`",
+            delete_after=30,
         )
 
     async def cmd_botversion(self) -> CommandResponse:
