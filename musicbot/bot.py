@@ -509,7 +509,6 @@ class MusicBot(discord.Client):
                 player = self.get_player_in(guild)
 
                 if player:
-                    # TODO: Get serialization of last playback position working.
                     log.info("Discarding MusicPlayer and making a new one...")
                     await self.disconnect_voice_client(guild)
 
