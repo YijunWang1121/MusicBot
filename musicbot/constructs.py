@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import inspect
 import json
 import logging
@@ -20,9 +21,9 @@ from typing import (
 import discord
 
 from .constants import (
+    DATA_GUILD_FILE_OPTIONS,
     DEFAULT_BOT_ICON,
     DEFAULT_BOT_NAME,
-    DEFAULT_DATA_NAME_OPTIONS,
     DEFAULT_FOOTER_TEXT,
 )
 from .json import Json
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from discord.types.embed import EmbedType
 
+    from .autoplaylist import AutoPlaylist
     from .bot import MusicBot
     from .config import Config
 
@@ -64,9 +66,7 @@ class GuildAsyncEvent(asyncio.Event):
 
 class GuildSpecificData:
     """
-    A typed collection of data specific to each guild/server.
-    This could replace the defaultdict implementation...
-    Currently unused.
+    A typed collection of data specific to each guild/discord server.
     """
 
     def __init__(self, bot: "MusicBot") -> None:
@@ -89,11 +89,18 @@ class GuildSpecificData:
         # Members below are available for public use.
         self.last_np_msg: Optional["discord.Message"] = None
         self.last_played_song_subject: str = ""
+        self.follow_user: Optional["discord.Member"] = None
+        self.auto_join_channel: Optional[
+            Union["discord.VoiceChannel", "discord.StageChannel"]
+        ] = None
+        self.autoplaylist: "AutoPlaylist" = self._bot.playlist_mgr.get_default()
+        self.current_playing_url: str = ""
 
         # create a task to load any persistent guild options.
         # in theory, this should work out fine.
         if bot.loop:
             bot.loop.create_task(self.load_guild_options_file())
+            bot.loop.create_task(self.autoplaylist.load())
 
     def is_ready(self) -> bool:
         """A status indicator for fully loaded server data."""
@@ -115,6 +122,20 @@ class GuildSpecificData:
                 return key
         return 0
 
+    async def get_played_history(self) -> Optional["AutoPlaylist"]:
+        """Get the history playlist for this guild, if enabled."""
+        if not self._bot.config.enable_queue_history_guilds:
+            return None
+
+        if not self.is_ready():
+            return None
+
+        pl = self._bot.playlist_mgr.get_playlist(f"history-{self._guild_id}.txt")
+        pl.create_file()
+        if not pl.loaded:
+            await pl.load()
+        return pl
+
     @property
     def command_prefix(self) -> str:
         """
@@ -130,8 +151,14 @@ class GuildSpecificData:
     @command_prefix.setter
     def command_prefix(self, value: str) -> None:
         """Set the value of command_prefix"""
+        if not value:
+            raise ValueError("Cannot set an empty prefix.")
+
         # update prefix history
-        self._prefix_history.add(self._command_prefix)
+        if not self._command_prefix:
+            self._prefix_history.add(self._bot_config.command_prefix)
+        else:
+            self._prefix_history.add(self._command_prefix)
 
         # set prefix value
         self._command_prefix = value
@@ -141,11 +168,23 @@ class GuildSpecificData:
             self._prefix_history.pop()
 
     @property
-    def command_prefix_history(self) -> List[str]:
-        """Get the prefix history from this session, including the current prefix."""
+    def command_prefix_list(self) -> List[str]:
+        """
+        Get the prefix list for this guild.
+        It includes a history of prefix changes since last restart as well.
+        """
         history = list(self._prefix_history)
+
+        # add self mention to invoke list.
+        if self._bot_config.commands_via_mention and self._bot.user:
+            history.append(f"<@{self._bot.user.id}>")
+
+        # Add current prefix to list.
         if self._command_prefix:
             history = [self._command_prefix] + history
+        else:
+            history = [self._bot_config.command_prefix] + history
+
         return history
 
     def get_event(self, name: str) -> GuildAsyncEvent:
@@ -173,7 +212,7 @@ class GuildSpecificData:
                     return
 
             opt_file = self._bot_config.data_path.joinpath(
-                str(self._guild_id), DEFAULT_DATA_NAME_OPTIONS
+                str(self._guild_id), DATA_GUILD_FILE_OPTIONS
             )
             if not opt_file.is_file():
                 log.debug("No file for guild %s/%s", self._guild_id, self._guild_name)
@@ -206,6 +245,11 @@ class GuildSpecificData:
                     self._command_prefix,
                 )
 
+            guild_playlist = options.get("auto_playlist", None)
+            if guild_playlist:
+                self.autoplaylist = self._bot.playlist_mgr.get_playlist(guild_playlist)
+                await self.autoplaylist.load()
+
     async def save_guild_options_file(self) -> None:
         """
         Save server-specific options, like the command prefix, to a JSON
@@ -218,11 +262,18 @@ class GuildSpecificData:
             return
 
         opt_file = self._bot_config.data_path.joinpath(
-            str(self._guild_id), DEFAULT_DATA_NAME_OPTIONS
+            str(self._guild_id), DATA_GUILD_FILE_OPTIONS
         )
 
+        auto_playlist = None
+        if self.autoplaylist is not None:
+            auto_playlist = self.autoplaylist.filename
+
         # Prepare a dictionary to store our options.
-        opt_dict = {"command_prefix": self._command_prefix}
+        opt_dict = {
+            "command_prefix": self._command_prefix,
+            "auto_playlist": auto_playlist,
+        }
 
         async with self._file_lock:
             try:
@@ -306,6 +357,153 @@ class Response:
         if self.codeblock:
             return self._codeblock.format(self._content)
         return self._content
+
+
+class EmbedResponse(discord.Embed):
+    """
+    Extended version of discord.Embed with aspects of a Response object.
+    It's goal is to facilitate a more universal output, which can be switched from
+    Plain-Text to Embed.
+
+    Members from discord.Embed:
+    --------------------------------------------
+    Attributes          |  Methods
+    --------------------+-----------------------
+    author              |    Embed.from_dict
+    colour              |    add_field
+    description         |    clear_fields
+    fields              |    copy
+    footer              |    insert_field_at
+    image               |    remove_author
+    provider            |    remove_field
+    thumbnail           |    remove_footer
+    timestamp           |    set_author
+    title               |    set_field_at
+    type                |    set_footer
+    url                 |    set_image
+    video               |    set_thumbnail
+                        |    to_dict
+    --------------------+------------------------
+
+    """
+
+    __slots__ = ["_content", "reply", "delete_after", "codeblock", "_codeblock"]
+
+    def __init__(
+        self,
+        content: str = "",
+        reply: bool = False,
+        delete_after: int = 0,
+        codeblock: str = "",
+        *,
+        # args all passed to discord.Embed.
+        colour: Optional[Union[int, discord.Colour]] = None,
+        color: Optional[Union[int, discord.Colour]] = None,
+        title: Optional[Any] = None,
+        type: "EmbedType" = "rich",  # pylint: disable=redefined-builtin
+        url: Optional[Any] = None,
+        description: Optional[Any] = None,
+        timestamp: Optional[datetime.datetime] = None,
+    ) -> None:
+        """
+        A variation of discord.Embed, extended with features for MusicBot.
+        This class should be used to create all messages and responses from the bot.
+
+        :param: content:  the message to be sent, an alias for `description` in embed.
+        :param: reply:  if this response should reply to the original author.
+        :param: delete_after:  how long to wait before deleting the message created by this Response.
+            Set to 0 to never delete.
+        :param: codeblock:  format a code block with this value as the language used for syntax highlights.
+        """
+        self._content = content
+        self.reply = reply
+        self.delete_after = delete_after
+        self.codeblock = codeblock
+        self._codeblock = f"```{codeblock}\n{{}}\n```"
+
+        desc = self.content if content else description
+        super().__init__(
+            colour=colour,
+            color=color,
+            title=title,
+            type=type,
+            url=url,
+            description=desc,
+            timestamp=timestamp,
+        )
+
+        # TODO: make sure the author name, avatar, and the footer text get
+        # updated with non-default values at sending time.
+        self.update_footer("", "")
+        self.update_author("", "")
+
+    @staticmethod
+    def make_basic() -> "EmbedResponse":
+        """Provides a basic template for embeds"""
+
+        e = EmbedResponse(colour=discord.Colour(7506394))
+
+        return e
+
+    def update_author(self, name: str, av_url: str) -> None:
+        """
+        Apply new values to author field, using defaults for omitted fields.
+        """
+        if not name:
+            name = DEFAULT_BOT_NAME
+        if not av_url:
+            av_url = DEFAULT_BOT_ICON
+        self.set_author(
+            name=name,
+            url="https://github.com/Just-Some-Bots/MusicBot",
+            icon_url=av_url,
+        )
+
+    def update_footer(self, text: str = "", icon_url: str = "") -> None:
+        """
+        Apply new values to the footer field, using defaults for omitted fields.
+        """
+        self.set_footer(
+            text=text if text else DEFAULT_FOOTER_TEXT,
+            icon_url=icon_url if icon_url else DEFAULT_BOT_ICON,
+        )
+
+    @property
+    def content(self) -> Union[str, "discord.Embed"]:
+        """
+        Get the Response content, but quietly format a code block if needed.
+        """
+        if self.codeblock:
+            return self._codeblock.format(self._content)
+        return self._content
+
+    def to_markdown(self) -> str:
+        """
+        Converts the embed to a markdown text.
+        Embeds may have more content than text messages will allow!
+        """
+        out = ""
+        if self.title:
+            out += f"## {self.title}\n"
+        if self.description:
+            out += f"{self.description}\n"
+        if self.url:
+            out += f"**URL:**  {self.url}\n"
+
+        # TODO: should we print both image and thumbnail URLs??
+        # or anything at all?
+
+        for field in self.fields:
+            fn = f"**{field.name}**" if field.name else ""
+            fv = ""
+            if field.value:
+                if field.name:
+                    fv = f" {field.value}"
+                else:
+                    fv = field.value
+            out += f"{fn}{fv}\n"
+
+        return out
 
 
 class Serializer(json.JSONEncoder):

@@ -20,17 +20,17 @@ from typing import (
 import configupdater
 
 from .constants import (
-    BUNDLED_AUTOPLAYLIST_FILE,
-    DEFAULT_AUDIO_CACHE_PATH,
-    DEFAULT_AUTOPLAYLIST_FILE,
-    DEFAULT_DATA_NAME_SERVERS,
-    DEFAULT_DATA_PATH,
+    DATA_FILE_SERVERS,
+    DEFAULT_AUDIO_CACHE_DIR,
+    DEFAULT_DATA_DIR,
     DEFAULT_FOOTER_TEXT,
     DEFAULT_I18N_FILE,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_KEPT,
     DEFAULT_LOGS_ROTATE_FORMAT,
+    DEFAULT_MEDIA_FILE_DIR,
     DEFAULT_OPTIONS_FILE,
+    DEFAULT_PLAYLIST_DIR,
     DEFAULT_SONG_BLOCKLIST_FILE,
     DEFAULT_USER_BLOCKLIST_FILE,
     DEPRECATED_USER_BLACKLIST,
@@ -78,6 +78,10 @@ def create_file_ifnoexist(
             log.warning("Creating %s", path)
 
 
+# TODO: maybe add a means of generating default or first-run config.
+# TODO: maybe rename configs into proper sections, with migration for old config.
+
+
 class Config:
     """
     This object is responsible for loading and validating config, using default
@@ -100,7 +104,6 @@ class Config:
         self.config_file = config_file
         self.find_config()
 
-        # TODO: maybe some mechanism to handle config renames?
         config = ExtendedConfigParser()
         config.read(config_file, encoding="utf-8")
         self.register = ConfigOptionRegistry(self, config)
@@ -194,6 +197,17 @@ class Config:
             default=ConfigDefaults.command_prefix,
             comment="Command prefix is how all MusicBot commands must be started",
         )
+        self.commands_via_mention: bool = self.register.init_option(
+            section="Chat",
+            option="CommandsByMention",
+            dest="commands_via_mention",
+            default=ConfigDefaults.commands_via_mention,
+            getter="getboolean",
+            comment=(
+                "Enable using commands with @[YourBotNameHere]\n"
+                "The CommandPrefix is still available, but can be replaced with @ mention."
+            ),
+        )
         self.bound_channels: Set[int] = self.register.init_option(
             section="Chat",
             option="BindToChannels",
@@ -263,6 +277,17 @@ class Config:
             comment=(
                 "Sets the default volume level MusicBot will play songs at. "
                 "Must be a value from 0 to 1 inclusive."
+            ),
+        )
+        self.default_speed: float = self.register.init_option(
+            section="MusicBot",
+            option="DefaultSpeed",
+            dest="default_speed",
+            default=ConfigDefaults.default_speed,
+            getter="getfloat",
+            comment=(
+                "Sets the default speed MusicBot will play songs at.\n"
+                "Must be a value from 0.5 to 100.0 for ffmpeg to use it."
             ),
         )
         self.skips_required: int = self.register.init_option(
@@ -405,7 +430,20 @@ class Config:
             option="StatusMessage",
             dest="status_message",
             default=ConfigDefaults.status_message,
-            comment="Set a custom status text instead of showing dynamic info about what is playing in bot's activity status.",
+            comment=(
+                "Specify a custom message to use as the bot's status. If left empty, the bot\n"
+                "will display dynamic info about music currently being played in its status instead.\n"
+                "Status messages may also use the following variables:\n"
+                " {n_playing}   = Number of currently Playing music players.\n"
+                " {n_paused}    = Number of currently Paused music players.\n"
+                " {n_connected} = Number of connected music players, in any player state.\n"
+                "\n"
+                "The following variables give access to information about the player and track.\n"
+                "These variables may not be accurate in multi-guild bots:\n"
+                " {p0_length}   = The total duration of the track, if available. Ex: [2:34]\n"
+                " {p0_title}    = The track title for the currently playing track.\n"
+                " {p0_url}      = The track url for the currently playing track."
+            ),
         )
         self.write_current_song: bool = self.register.init_option(
             section="MusicBot",
@@ -586,6 +624,37 @@ class Config:
             ),
         )
 
+        self.enable_queue_history_global: bool = self.register.init_option(
+            section="MusicBot",
+            option="SavePlayedHistoryGlobal",
+            dest="enable_queue_history_global",
+            default=ConfigDefaults.enable_queue_history_global,
+            getter="getboolean",
+            comment="Enable saving all songs played by MusicBot to a playlist, history.txt",
+        )
+
+        self.enable_queue_history_guilds: bool = self.register.init_option(
+            section="MusicBot",
+            option="SavePlayedHistoryGuilds",
+            dest="enable_queue_history_guilds",
+            default=ConfigDefaults.enable_queue_history_guilds,
+            getter="getboolean",
+            comment="Enable saving songs played per-guild/server to a playlist, history-{guild_id}.txt",
+        )
+
+        self.enable_local_media: bool = self.register.init_option(
+            section="MusicBot",
+            option="EnableLocalMedia",
+            dest="enable_local_media",
+            default=ConfigDefaults.enable_local_media,
+            getter="getboolean",
+            comment=(
+                "Enable playback of local media files using the play command.\n"
+                "When enabled, users can use:  `play file://path/to/file.ext`\n"
+                "to play files from the local MediaFileDirectory path."
+            ),
+        )
+
         self.user_blocklist_enabled: bool = self.register.init_option(
             section="MusicBot",
             option="EnableUserBlocklist",
@@ -625,17 +694,32 @@ class Config:
         )
         self.song_blocklist: "SongBlocklist" = SongBlocklist(self.song_blocklist_file)
 
-        self.auto_playlist_file: pathlib.Path = self.register.init_option(
+        self.auto_playlist_dir: pathlib.Path = self.register.init_option(
             section="Files",
-            option="AutoPlaylistFile",
-            dest="auto_playlist_file",
-            default=ConfigDefaults.auto_playlist_file,
+            option="AutoPlaylistDirectory",
+            dest="auto_playlist_dir",
+            default=ConfigDefaults.auto_playlist_dir,
             getter="getpathlike",
             comment=(
-                "An optional file path to an auto playlist text file.\n"
-                "Each line of the file will be treated similarly to using the play command."
+                "An optional path to a directory containing auto playlist files."
+                "Each file should contain a list of playable URLs or terms, one track per line."
             ),
         )
+
+        self.media_file_dir: pathlib.Path = self.register.init_option(
+            section="Files",
+            option="MediaFileDirectory",
+            dest="media_file_dir",
+            default=ConfigDefaults.media_file_dir,
+            getter="getpathlike",
+            comment=(
+                "An optional directory path where playable media files can be stored.\n"
+                "All files and sub-directories can then be accessed by using 'file://' as a protocol.\n"
+                "Example:  file://some/folder/name/file.ext\n"
+                "Maps to:  ./media/some/folder/name/file.ext"
+            ),
+        )
+
         self.i18n_file: pathlib.Path = self.register.init_option(
             section="Files",
             option="i18nFile",
@@ -685,8 +769,8 @@ class Config:
         )
 
         # Convert all path constants into config as pathlib.Path objects.
-        self.data_path = pathlib.Path(DEFAULT_DATA_PATH).resolve()
-        self.server_names_path = self.data_path.joinpath(DEFAULT_DATA_NAME_SERVERS)
+        self.data_path = pathlib.Path(DEFAULT_DATA_DIR).resolve()
+        self.server_names_path = self.data_path.joinpath(DATA_FILE_SERVERS)
 
         # Validate the config settings match destination values.
         self.register.validate_register_destinations()
@@ -709,8 +793,6 @@ class Config:
         self.spotify_enabled = False
 
         self.run_checks()
-
-        self.setup_autoplaylist()
 
     def run_checks(self) -> None:
         """
@@ -816,6 +898,16 @@ class Config:
 
         if not self.footer_text:
             self.footer_text = ConfigDefaults.footer_text
+
+        if self.default_speed < 0.5 or self.default_speed > 100.0:
+            log.warning(
+                "The default playback speed must be between 0.5 and 100.0. "
+                "The option value of %.3f will be limited instead."
+            )
+            self.default_speed = max(min(self.default_speed, 100.0), 0.5)
+
+        if self.enable_local_media and not self.media_file_dir.is_dir():
+            self.media_file_dir.mkdir(exist_ok=True)
 
     async def async_validate(self, bot: "MusicBot") -> None:
         """
@@ -933,35 +1025,6 @@ class Config:
                     "The OwnerID option requires a user ID number or 'auto'.",
                 ) from e
 
-    def setup_autoplaylist(self) -> None:
-        """
-        Check for and copy the bundled playlist file if the configured file is empty.
-        Also set up file paths for playlist removal audits and for cache-map data.
-        """
-        if not self.auto_playlist_file.is_file():
-            bundle_file = pathlib.Path(BUNDLED_AUTOPLAYLIST_FILE)
-            if bundle_file.is_file():
-                shutil.copy(bundle_file, self.auto_playlist_file)
-                log.debug(
-                    "Copying bundled autoplaylist '%s' to '%s'",
-                    BUNDLED_AUTOPLAYLIST_FILE,
-                    self.auto_playlist_file,
-                )
-            else:
-                log.warning(
-                    "Missing bundled autoplaylist file, cannot pre-load playlist."
-                )
-
-        # ensure cache map and removed files have values based on the configured file.
-        stem = self.auto_playlist_file.stem
-        ext = self.auto_playlist_file.suffix
-
-        ap_removed_file = self.auto_playlist_file.with_name(f"{stem}_removed{ext}")
-        ap_cachemap_file = self.auto_playlist_file.with_name(f"{stem}.cachemap.json")
-
-        self.auto_playlist_removed_file = ap_removed_file
-        self.auto_playlist_cachemap_file = ap_cachemap_file
-
     def update_option(self, option: "ConfigOption", value: str) -> bool:
         """
         Uses option data to parse the given value and update its associated config.
@@ -990,7 +1053,7 @@ class Config:
         """
         Converts the current Config value into an INI file value as needed.
         Note: ConfigParser must not use multi-line values. This will break them.
-        Should multiline values be needed, maybe use ConfigUpdater package instead.
+        Should multi-line values be needed, maybe use ConfigUpdater package instead.
         """
         try:
             cu = configupdater.ConfigUpdater()
@@ -1013,8 +1076,6 @@ class Config:
                 else:
                     cu[option.section][option.option] = self.register.to_ini(option)
             else:
-                # TODO: Maybe we should make a method that handles first-time setup
-                # or otherwise some form of auto-update thing for config?
                 log.error(
                     "Config section not in parsed config! Missing: %s", option.section
                 )
@@ -1051,6 +1112,7 @@ class ConfigDefaults:
     spotify_clientsecret: str = ""
 
     command_prefix: str = "!"
+    commands_via_mention: bool = True
     bound_channels: Set[int] = set()
     unbound_servers: bool = False
     autojoin_channels: Set[int] = set()
@@ -1060,6 +1122,7 @@ class ConfigDefaults:
     delete_nowplaying: bool = True
 
     default_volume: float = 0.15
+    default_speed: float = 1.0
     skips_required: int = 4
     skip_ratio_required: float = 0.5
     save_videos: bool = True
@@ -1098,6 +1161,9 @@ class ConfigDefaults:
     footer_text: str = DEFAULT_FOOTER_TEXT
     defaultround_robin_queue: bool = False
     enable_network_checker: bool = False
+    enable_local_media: bool = False
+    enable_queue_history_global: bool = False
+    enable_queue_history_guilds: bool = False
 
     song_blocklist: Set[str] = set()
     user_blocklist: Set[int] = set()
@@ -1112,9 +1178,10 @@ class ConfigDefaults:
     options_file: pathlib.Path = pathlib.Path(DEFAULT_OPTIONS_FILE)
     user_blocklist_file: pathlib.Path = pathlib.Path(DEFAULT_USER_BLOCKLIST_FILE)
     song_blocklist_file: pathlib.Path = pathlib.Path(DEFAULT_SONG_BLOCKLIST_FILE)
-    auto_playlist_file: pathlib.Path = pathlib.Path(DEFAULT_AUTOPLAYLIST_FILE)
+    auto_playlist_dir: pathlib.Path = pathlib.Path(DEFAULT_PLAYLIST_DIR)
+    media_file_dir: pathlib.Path = pathlib.Path(DEFAULT_MEDIA_FILE_DIR)
     i18n_file: pathlib.Path = pathlib.Path(DEFAULT_I18N_FILE)
-    audio_cache_path: pathlib.Path = pathlib.Path(DEFAULT_AUDIO_CACHE_PATH).absolute()
+    audio_cache_path: pathlib.Path = pathlib.Path(DEFAULT_AUDIO_CACHE_DIR).absolute()
 
     @staticmethod
     def _debug_level() -> Tuple[str, int]:
@@ -1195,6 +1262,7 @@ class ConfigOptionRegistry:
         self._sections: Set[str] = set()
         self._options: Set[str] = set()
         self._distinct_options: Set[str] = set()
+        self._has_resolver: bool = True
 
         # set up missing config data.
         self.ini_missing_options: Set[ConfigOption] = set()
@@ -1214,6 +1282,11 @@ class ConfigOptionRegistry:
     def option_list(self) -> List[ConfigOption]:
         """Non-settable option list."""
         return self._option_list
+
+    @property
+    def resolver_available(self) -> bool:
+        """Status of option name-to-section resolver. If False, resolving cannot be used."""
+        return self._has_resolver
 
     def update_missing_config(self) -> None:
         """
@@ -1238,6 +1311,16 @@ class ConfigOptionRegistry:
         for option in self._option_list:
             if str(option) not in p_key_set:
                 self.ini_missing_options.add(option)
+
+    def get_sections_from_option(self, option_name: str) -> Set[str]:
+        """
+        Get the Section name(s) associated with the given `option_name` if available.
+
+        :return:  A set containing one or more section names, or an empty set if no option exists.
+        """
+        if self._has_resolver:
+            return set(o.section for o in self._option_list if o.option == option_name)
+        return set()
 
     def get_updated_options(self) -> List[ConfigOption]:
         """
@@ -1485,6 +1568,11 @@ class ConfigOptionRegistry:
         )
         self._option_list.append(config_opt)
         self._sections.add(section)
+        if str(config_opt) in self._options:
+            log.warning(
+                "Option names are not unique between INI sections!  Resolver is disabled."
+            )
+            self._has_resolver = False
         self._options.add(str(config_opt))
         self._distinct_options.add(option)
 

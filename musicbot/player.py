@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from discord import AudioSource, FFmpegPCMAudio, PCMVolumeTransformer, VoiceClient
 
 from .constructs import Serializable, Serializer, SkipState
-from .entry import StreamPlaylistEntry, URLPlaylistEntry
+from .entry import LocalFilePlaylistEntry, StreamPlaylistEntry, URLPlaylistEntry
 from .exceptions import FFmpegError, FFmpegWarning
 from .lib.event_emitter import EventEmitter
 
@@ -24,7 +24,7 @@ else:
     AsyncFuture = asyncio.Future
 
 # Type alias
-EntryTypes = Union[URLPlaylistEntry, StreamPlaylistEntry]
+EntryTypes = Union[URLPlaylistEntry, StreamPlaylistEntry, LocalFilePlaylistEntry]
 
 log = logging.getLogger(__name__)
 
@@ -46,30 +46,52 @@ class SourcePlaybackCounter(AudioSource):
     def __init__(
         self,
         source: PCMVolumeTransformer[FFmpegPCMAudio],
-        progress: int = 0,
+        start_time: float = 0,
+        playback_speed: float = 1.0,
     ) -> None:
         """
         Manage playback source and attempt to count progress frames used
         to measure playback progress.
+
+        :param: start_time:  A time in seconds that was used in ffmpeg -ss flag.
         """
         self._source = source
-        self.progress = progress
+        self._num_reads: int = 0
+        self._start_time: float = start_time
+        self._playback_speed: float = playback_speed
 
     def read(self) -> bytes:
         res = self._source.read()
         if res:
-            self.progress += 1
+            self._num_reads += 1
         return res
-
-    def get_progress(self) -> float:
-        """Get an approximate playback progress."""
-        return self.progress * 0.02
 
     def cleanup(self) -> None:
         log.noise(  # type: ignore[attr-defined]
-            "Cleanup got called on the audio source:  %s", repr(self)
+            "Cleanup got called on the audio source:  %r", self
         )
         self._source.cleanup()
+
+    @property
+    def frames(self) -> int:
+        """
+        Number of read frames since this source was opened.
+        This is not the total playback time.
+        """
+        return self._num_reads
+
+    @property
+    def session_progress(self) -> float:
+        """
+        Like progress but only counts frames from this session.
+        Adjusts the estimated time by playback speed.
+        """
+        return (self._num_reads * 0.02) * self._playback_speed
+
+    @property
+    def progress(self) -> float:
+        """Get an approximate playback progress time."""
+        return self._start_time + self.session_progress
 
 
 class MusicPlayer(EventEmitter, Serializable):
@@ -132,7 +154,7 @@ class MusicPlayer(EventEmitter, Serializable):
         """
         Event dispatched by Playlist when an entry is added to the queue.
         """
-        if self.is_stopped:
+        if self.is_stopped and not self._play_lock.locked():
             log.noise("calling-later, self.play from player.")  # type: ignore[attr-defined]
             self.loop.call_later(2, self.play)
 
@@ -335,6 +357,12 @@ class MusicPlayer(EventEmitter, Serializable):
             )
             return self.resume()
 
+        if self._play_lock.locked():
+            log.voicedebug(  # type: ignore[attr-defined]
+                "MusicPlayer already locked for playback, this call is ignored."
+            )
+            return
+
         async with self._play_lock:
             if self.is_stopped or _continue:
                 try:
@@ -354,8 +382,11 @@ class MusicPlayer(EventEmitter, Serializable):
 
                 boptions = "-nostdin"
                 # aoptions = "-vn -b:a 192k"
-                if isinstance(entry, URLPlaylistEntry):
+                if isinstance(entry, (URLPlaylistEntry, LocalFilePlaylistEntry)):
                     aoptions = entry.aoptions
+                    # check for before options, currently just -ss here.
+                    if entry.boptions:
+                        boptions += f" {entry.boptions}"
                 else:
                     aoptions = "-vn"
 
@@ -377,7 +408,9 @@ class MusicPlayer(EventEmitter, Serializable):
                             stderr=stderr_io,
                         ),
                         self.volume,
-                    )
+                    ),
+                    start_time=entry.start_time,
+                    playback_speed=entry.playback_speed,
                 )
                 log.voicedebug(  # type: ignore[attr-defined]
                     "Playing %r using %r", self._source, self.voice_client
@@ -447,22 +480,11 @@ class MusicPlayer(EventEmitter, Serializable):
                     )
 
     def __json__(self) -> Dict[str, Any]:
-        progress_frames = None
-        if (
-            self._current_player
-            and self._current_player._player  # pylint: disable=protected-access
-        ):
-            if self.progress is not None:
-                progress_frames = (
-                    self._current_player._player.loops  # pylint: disable=protected-access
-                )
-
         return self._enclose_json(
             {
                 "current_entry": {
                     "entry": self.current_entry,
-                    "progress": self.progress,
-                    "progress_frames": progress_frames,
+                    "progress": self.progress if self.progress > 1 else None,
                 },
                 "entries": self.playlist,
             }
@@ -489,12 +511,13 @@ class MusicPlayer(EventEmitter, Serializable):
 
         current_entry_data = raw_json["current_entry"]
         if current_entry_data["entry"]:
+            entry = current_entry_data["entry"]
+            progress = current_entry_data["progress"]
+            if progress and isinstance(
+                entry, (URLPlaylistEntry, LocalFilePlaylistEntry)
+            ):
+                entry.set_start_time(progress)
             player.playlist.entries.appendleft(current_entry_data["entry"])
-            # TODO: progress stuff
-            # how do I even do this
-            # this would have to be in the entry class right?
-            # some sort of progress indicator to skip ahead with ffmpeg (however that works, reading and ignoring frames?)
-
         return player
 
     @classmethod
@@ -554,11 +577,17 @@ class MusicPlayer(EventEmitter, Serializable):
         Return a progress value for the media playback.
         """
         if self._source:
-            return self._source.get_progress()
-            # TODO: Properly implement this
-            #       Correct calculation should be bytes_read/192k
-            #       192k AKA sampleRate * (bitDepth / 8) * channelCount
-            #       Change frame_count to bytes_read in the PatchedBuff
+            return self._source.progress
+        return 0
+
+    @property
+    def session_progress(self) -> float:
+        """
+        Return the estimated playback time of the current playback source.
+        Like progress, but does not include any start-time if one was used.
+        """
+        if self._source:
+            return self._source.session_progress
         return 0
 
 
