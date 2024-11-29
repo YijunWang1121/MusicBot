@@ -8,7 +8,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")" || { echo "Could not change directory to Mus
 function do_exit() {
     if [ "${VIRTUAL_ENV}" != "" ] ; then
         echo "Leaving MusicBot Venv..."
-        deactivate
+        # deactivate
     fi
     exit "$1"
 }
